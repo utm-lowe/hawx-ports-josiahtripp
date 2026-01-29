@@ -137,9 +137,37 @@
 #include "console.h"
 #include "port.h"
 
+#ifndef NULL
+    #define NULL 0
+#endif
+
+// Possible port status
+#define PORT_STATUS_INUSE 0 // Port is currently allocated
+#define PORT_STATUS_FREE 1 // Port is free to allocate
+
 // The global collection of ports
 struct port ports[NPORT];
 
+// Reset all port contents and mark it as free
+static void
+reset_port(int port)
+{   
+    // Clear status, type, and owner
+    ports[port].free = PORT_STATUS_FREE;
+    ports[port].type = PORT_TYPE_FREE;
+    ports[port].owner = NULL;
+
+    // Clear tracking variables of circular buffer
+    ports[port].head = 0;
+    ports[port].tail = 0;
+    ports[port].count = 0;
+
+    // Clear the port buffer
+    for(int buffer_index = 0; buffer_index < PORT_BUF_SIZE; buffer_index++)
+    {
+        ports[port].buffer[buffer_index] = (char) NULL;
+    }
+}
 
 // Initialize the ports
 void 
@@ -156,7 +184,32 @@ port_init(void)
     // Loop through 0 to NPORT-1, initialize status of kernal ports and
     // non-kernal ports. Make sure that all ports are empty.
 
-    // YOUR CODE HERE
+    for(int port_index = 0; port_index < NPORT; port_index++)
+    {
+        // Reset the port contents
+        reset_port(port_index);
+
+        // Set port usage type & status
+        switch (port_index)
+        {
+            case PORT_CONSOLEIN:
+                ports[port_index].free = PORT_STATUS_INUSE;
+                ports[port_index].type = PORT_TYPE_KERNEL;
+            break;
+
+            case PORT_CONSOLEOUT:
+                ports[port_index].free = PORT_STATUS_INUSE;
+                ports[port_index].type = PORT_TYPE_KERNEL;
+            break;
+
+            case PORT_DISKCMD:
+                ports[port_index].free = PORT_STATUS_INUSE;
+                ports[port_index].type = PORT_TYPE_KERNEL;
+            break;
+            
+            default:
+        }
+    }
 }
 
 
@@ -167,7 +220,20 @@ port_close(int port)
     // Close the port.  If the port is not open, nothing will happen.  However,
     // if it is open, we empty its contents and mark it as free.
 
-    // YOUR CODE HERE
+    // Return if the port is not open
+    if(ports[port].free == PORT_STATUS_FREE)
+    {
+        return;
+    }
+
+    // Return if the port is kernel type
+    if(ports[port].type == PORT_TYPE_KERNEL)
+    {
+        return;
+    }
+
+    // Reset contents
+    reset_port(port);
 }
 
 
@@ -184,9 +250,42 @@ port_acquire(int port, procid_t proc_id)
     // 
     // If this operation fails, return -1.
 
-    // YOUR CODE HERE
-    
-    return -1;
+    // Allocate the next free port
+    if(port < 0)
+    {
+        // Find the index of the next free port
+        for(int free_port = 0; free_port < NPORT; free_port++)
+        {   
+            // Free port found
+            if(ports[free_port].free == PORT_STATUS_FREE)
+            {
+                // Aquire the port
+                return port_acquire(free_port, proc_id);
+            }
+        }
+        
+        // No free ports, operation failed
+        return -1;
+    }
+
+    // Return if the port is type kernel
+    if(ports[port].type == PORT_TYPE_KERNEL)
+    {
+        return -1;
+    }
+
+    // Return if the port is in use
+    if(ports[port].free == PORT_STATUS_INUSE)
+    {
+        return -1;
+    }
+
+    // Allocate the port
+    ports[port].free = PORT_STATUS_INUSE;
+    ports[port].owner = proc_id;
+
+    // Return allocated port number
+    return port;
 }
 
 
@@ -200,8 +299,31 @@ port_write(int port, char *buf, int n)
     // you have written. Be sure to update the count field as you
     // write it.
 
-    // YOUR CODE HERE
-    return -1;
+    // Return if the port is not open
+    if(ports[port].free == PORT_STATUS_FREE)
+    {
+        return -1;
+    }
+
+    // Write to port buffer
+    for(int buf_index = 0; buf_index < n; buf_index++)
+    {   
+        // Check for buffer space (count)
+        if(ports[port].count < PORT_BUF_SIZE)
+        {   
+            ports[port].buffer[ports[port].head] = buf[buf_index]; // Write byte
+            ports[port].head = (ports[port].head + 1) % PORT_BUF_SIZE; // Increment buffer head
+            ports[port].count++; // Increment buffer count
+        }
+        else
+        {
+            // Buffer is full, return bytes written
+            return buf_index;
+        }
+    }
+
+    // n bytes were written
+    return n;
 }
 
 
@@ -215,7 +337,29 @@ port_read(int port, char *buf, int n)
     // Return the actual number of bytes you have read.
     // Be sure to update count as you read.
 
-    // YOUR CODE HERE
+    // Return if the port is not open
+    if(ports[port].free == PORT_STATUS_FREE)
+    {
+        return -1;
+    }
 
-    return -1;
+    // Read port buffer
+    for(int buf_index = 0; buf_index < n; buf_index++)
+    {   
+        // Check for buffer space (count)
+        if(ports[port].count > 0)
+        {   
+            buf[buf_index] = ports[port].buffer[ports[port].tail]; // Read byte
+            ports[port].tail = (ports[port].tail + 1) % PORT_BUF_SIZE; // Increment buffer tail
+            ports[port].count--; // Decrement buffer count
+        }
+        else
+        {
+            // Buffer is empty, return bytes read
+            return buf_index;
+        }
+    }
+
+    // n bytes were read
+    return n;
 }
